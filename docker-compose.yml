@@ -1,0 +1,90 @@
+services:
+
+  # ─────────────────────────────────────────────
+  # ChromaDB — Serveur vectoriel HTTP
+  # Exposé sur le port 8000, accessible par toutes
+  # les autres applications du réseau Docker
+  # ─────────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:0.5.3
+    container_name: chromadb
+    restart: unless-stopped
+    ports:
+      - "8100:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - chroma_net
+
+  # ─────────────────────────────────────────────
+  # Ollama — Embeddings locaux (nomic-embed-text)
+  # Si Ollama tourne déjà sur ta machine en dehors
+  # de Docker, retire ce service et règle
+  # OLLAMA_HOST=http://host.docker.internal:11434
+  # ─────────────────────────────────────────────
+  #ollama:
+  #  image: ollama/ollama:latest
+  #  container_name: ollama
+  #  restart: unless-stopped
+  #  ports:
+  #    - "11434:11434"
+  #  volumes:
+  #    - ollama_data:/root/.ollama
+  #  healthcheck:
+  #    test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+  #    interval: 30s
+  #    timeout: 10s
+  #    retries: 5
+  #    start_period: 30s
+  #  networks:
+  #    - chroma_net
+
+  # ─────────────────────────────────────────────
+  # Streamlit Manager — Interface de gestion
+  # ─────────────────────────────────────────────
+  chroma-manager:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: chroma-manager
+    restart: unless-stopped
+    ports:
+      - "8600:8501"
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - OLLAMA_HOST=http://10.75.12.5:11434
+      - STREAMLIT_BROWSER_SERVER_ADDRESS=10.75.12.5
+      - STREAMLIT_BROWSER_SERVER_PORT=8600
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      #ollama:
+      #  condition: service_started
+    networks:
+      - chroma_net
+
+volumes:
+  chroma_data:
+    driver: local
+  #ollama_data:
+  #  driver: local
+
+networks:
+  chroma_net:
+    name: chroma_net
+    # Rendre ce réseau accessible aux autres docker-compose
+    # (ex: ton chatbot existant)
+    # → dans l'autre docker-compose, déclare :
+    #   networks:
+    #     chroma_net:
+    #       external: true
