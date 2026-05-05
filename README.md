@@ -142,3 +142,29 @@ docker compose down
 # Tout supprimer (données incluses)
 docker compose down -v
 ```
+
+
+# switcher entre collections
+
+```python
+import chromadb
+from chromadb.utils import embedding_functions
+
+# 1. Connexion au serveur
+client = chromadb.HttpClient(host="chromadb", port=8000)
+
+# 2. Fonction d'embedding (doit être la même que l'ingestion)
+ollama_ef = embedding_functions.OllamaEmbeddingFunction(
+    url="http://ollama:11434/api/embeddings",
+    model_name="nomic-embed-text"
+)
+
+# 3. Choix de la collection SPÉCIFIQUE
+collection_rh = client.get_collection(name="documents_ressources_humaines", embedding_function=ollama_ef)
+
+# 4. Requête
+resultats = collection_rh.query(
+    query_texts=["Quels sont les jours de congés ?"],
+    n_results=3
+)
+```

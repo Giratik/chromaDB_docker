@@ -5,6 +5,8 @@ import os
 import json
 import pandas as pd
 
+import datetime
+
 try:
     from pdf_engine import pdf_to_chunks, generate_ids, OCR_AVAILABLE
 except ImportError:
@@ -16,8 +18,8 @@ except ImportError:
 CHROMA_HOST         = os.environ.get("CHROMA_HOST", "localhost")
 CHROMA_PORT         = int(os.environ.get("CHROMA_PORT", 8000))
 OLLAMA_HOST         = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
-COLLECTION_NAME     = "base_connaissances_globale_acronymes"
-PDF_COLLECTION_NAME = "documents_pdf"
+#COLLECTION_NAME     = "base_connaissances_globale_acronymes"
+#PDF_COLLECTION_NAME = "documents_pdf"
 
 st.set_page_config(page_title="ChromaDB Manager", page_icon="🧠", layout="wide")
 
@@ -33,7 +35,6 @@ st.markdown("""
     --accent2: #38e8b0;
     --danger: #e85b5b;
     --warn: #e8b05b;
-    --text: #dde3f0;
     --text2: #7a84a0;
 }
 html,body,[class*="css"]{font-family:'DM Sans',sans-serif;background-color:var(--bg)!important;color:var(--text)!important;}
@@ -107,6 +108,24 @@ def build_document(acronyme, signification):
     return (f"{acronyme} {acronyme.lower()} : {signification}. "
             f"Également appelé {signification.lower()}.")
 
+# ─── CONNEXION AU CLIENT ──────────────────────────────────────────────────────
+try:
+    client = get_client()
+except Exception as e:
+    st.error(f"❌ Connexion ChromaDB impossible : {e}")
+    st.stop()
+
+# Récupérer les collections existantes
+try:
+    # Gère les différentes versions de l'API ChromaDB (objets vs strings)
+    raw_collections = client.list_collections()
+    existing_collections = [c.name if hasattr(c, 'name') else c for c in raw_collections]
+except Exception as e:
+    existing_collections = []
+
+if not existing_collections:
+    existing_collections = ["collection_par_defaut"]
+
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🧠 ChromaDB Manager")
@@ -116,6 +135,20 @@ with st.sidebar:
     st.markdown(f"<span class='badge {ocr_badge}'>● {ocr_label}</span>", unsafe_allow_html=True)
     st.markdown("---")
 
+    # --- NOUVEAU : GESTION DES COLLECTIONS ---
+    st.markdown("### 🗂️ Collection Active")
+    selected_collection = st.selectbox("Choisir la collection", existing_collections, label_visibility="collapsed")
+    
+    with st.expander("➕ Créer une nouvelle collection"):
+        new_coll_name = st.text_input("Nom de la collection (sans espaces)")
+        if st.button("Créer"):
+            if new_coll_name:
+                get_collection(client, new_coll_name)
+                st.success(f"Collection '{new_coll_name}' créée !")
+                st.rerun()
+    st.markdown("---")
+    # -----------------------------------------
+
     section = st.radio("Section", ["📚 Lexique", "📄 Documents PDF"], label_visibility="collapsed")
     st.markdown("---")
 
@@ -124,27 +157,18 @@ with st.sidebar:
             "📊 Dashboard", "📋 Parcourir", "➕ Ajouter",
             "✏️ Modifier", "🗑️ Supprimer", "📥 Import JSON", "📤 Export"
         ], label_visibility="collapsed")
-        st.markdown(f"<div style='color:var(--text2);font-size:0.75rem;'>Collection<br><code style='color:var(--accent)'>{COLLECTION_NAME}</code></div>", unsafe_allow_html=True)
     else:
         page = st.radio("Navigation — PDF", [
             "📊 Dashboard PDF", "📋 Parcourir PDF",
             "📥 Importer PDF", "🗑️ Supprimer PDF"
         ], label_visibility="collapsed")
-        st.markdown(f"<div style='color:var(--text2);font-size:0.75rem;'>Collection<br><code style='color:var(--accent)'>{PDF_COLLECTION_NAME}</code></div>", unsafe_allow_html=True)
-
-# ─── CONNEXION ────────────────────────────────────────────────────────────────
-try:
-    client = get_client()
-except Exception as e:
-    st.error(f"❌ Connexion ChromaDB impossible : {e}")
-    st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION LEXIQUE
 # ══════════════════════════════════════════════════════════════════════════════
 
 if section == "📚 Lexique":
-    collection = get_collection(client, COLLECTION_NAME)
+    collection = get_collection(client, selected_collection)
 
     # ── Dashboard ─────────────────────────────────────────────────────────────
     if page == "📊 Dashboard":
@@ -155,7 +179,7 @@ if section == "📚 Lexique":
         for col, val, label in [
             (c1, total, "Entrées totales"),
             (c2, len(set(r["acronyme"] for r in all_docs)), "Acronymes uniques"),
-            (c3, COLLECTION_NAME[:14] + "…", "Collection"),
+            (c3, selected_collection[:14] + "…", "Collection"),
         ]:
             col.markdown(f'<div class="metric-card"><div class="metric-val">{val}</div><div class="metric-label">{label}</div></div>', unsafe_allow_html=True)
         st.markdown("---")
@@ -261,6 +285,7 @@ if section == "📚 Lexique":
                 max_id = max([int(i) for i in existing_ids if i.isdigit()], default=-1)
                 added = skipped = 0
                 prog = st.progress(0)
+                #imported_at = datetime.utcnow().isoformat()
                 for i, entry in enumerate(data):
                     acro = entry.get("acronyme","").upper()
                     sig  = entry.get("signification","")
@@ -271,7 +296,12 @@ if section == "📚 Lexique":
                     max_id += 1
                     collection.add(
                         documents=[build_document(acro, sig)],
-                        metadatas=[{"acronyme": acro, "signification": sig}],
+                        metadatas=[{
+                            "acronyme": acro, 
+                            "signification": sig,
+                            "source": uploaded.name,  # On stocke le nom du fichier JSON
+                            #"imported_at": imported_at
+                        }],
                         ids=[str(max_id)]
                     )
                     added += 1
@@ -299,35 +329,54 @@ if section == "📚 Lexique":
 # ══════════════════════════════════════════════════════════════════════════════
 
 else:
-    pdf_col = get_collection(client, PDF_COLLECTION_NAME)
+    pdf_col = get_collection(client, selected_collection)
 
     # ── Dashboard PDF ─────────────────────────────────────────────────────────
     if page == "📊 Dashboard PDF":
-        st.title("Dashboard — Documents PDF")
+        st.title(f"Dashboard — Collection : {selected_collection}")
         total = pdf_col.count()
         all_docs = fetch_all_pdf(pdf_col)
-        sources = list(set(r["source"] for r in all_docs))
+        
+        # Récupérer la liste unique des fichiers sources
+        sources = list(set(r["source"] for r in all_docs if r.get("source")))
+        
         c1, c2, c3 = st.columns(3)
         for col, val, label in [
             (c1, total, "Chunks indexés"),
-            (c2, len(sources), "Documents sources"),
+            (c2, len(sources), "Fichiers sources"),
             (c3, "nomic-embed-text", "Modèle"),
         ]:
             col.markdown(f'<div class="metric-card"><div class="metric-val">{val}</div><div class="metric-label">{label}</div></div>', unsafe_allow_html=True)
 
         if sources:
             st.markdown("---")
-            st.markdown("## Documents indexés")
+            st.markdown("## Fichiers indexés dans cette collection")
             summary = []
+            
             for src in sources:
                 src_docs = [r for r in all_docs if r["source"] == src]
-                pages    = sorted(set(r["page"] for r in src_docs))
+                
+                # 1. Extraction de l'extension du fichier
+                _, ext = os.path.splitext(src)
+                ext_str = ext.upper().replace(".", "") if ext else "INCONNU"
+                
+                # 2. Gestion sécurisée des pages (au cas où on indexe des fichiers sans pages)
+                pages = [r.get("page") for r in src_docs if r.get("page") is not None]
+                if pages and all(isinstance(p, (int, float)) for p in pages):
+                    pages_str = f"{min(pages)}–{max(pages)}"
+                else:
+                    pages_str = "N/A"
+
+                # 3. Ajout au tableau récapitulatif
                 summary.append({
-                    "Fichier": src,
+                    "Nom du fichier": src,
+                    "Extension": ext_str,
                     "Chunks": len(src_docs),
-                    "Pages": f"{min(pages)}–{max(pages)}",
-                    "Importé le": src_docs[0]["imported_at"][:10] if src_docs else "",
+                    "Pages": pages_str,
+                    "Dernier import": src_docs[0].get("imported_at", "")[:10] if src_docs else "",
                 })
+            
+            # Affichage sous forme de tableau interactif
             st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
 
     # ── Parcourir PDF ─────────────────────────────────────────────────────────
