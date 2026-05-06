@@ -2,8 +2,6 @@ services:
 
   # ─────────────────────────────────────────────
   # ChromaDB — Serveur vectoriel HTTP
-  # Exposé sur le port 8000, accessible par toutes
-  # les autres applications du réseau Docker
   # ─────────────────────────────────────────────
   chromadb:
     image: chromadb/chroma:0.5.3
@@ -27,9 +25,6 @@ services:
 
   # ─────────────────────────────────────────────
   # Ollama — Embeddings locaux (nomic-embed-text)
-  # Si Ollama tourne déjà sur ta machine en dehors
-  # de Docker, retire ce service et règle
-  # OLLAMA_HOST=http://host.docker.internal:11434
   # ─────────────────────────────────────────────
   #ollama:
   #  image: ollama/ollama:latest
@@ -39,6 +34,13 @@ services:
   #    - "11434:11434"
   #  volumes:
   #    - ollama_data:/root/.ollama
+  #  deploy:
+  #    resources:
+  #      reservations:
+  #        devices:
+  #          - driver: nvidia
+  #            count: all
+  #            capabilities: [gpu]
   #  healthcheck:
   #    test: ["CMD", "curl", "-f", "http://localhost:11434/"]
   #    interval: 30s
@@ -50,6 +52,7 @@ services:
 
   # ─────────────────────────────────────────────
   # Streamlit Manager — Interface de gestion
+  # GPU exposé pour PaddleOCR
   # ─────────────────────────────────────────────
   chroma-manager:
     build:
@@ -65,6 +68,15 @@ services:
       - OLLAMA_HOST=http://10.75.12.5:11434
       - STREAMLIT_BROWSER_SERVER_ADDRESS=10.75.12.5
       - STREAMLIT_BROWSER_SERVER_PORT=8600
+      # PaddleOCR : forcer CUDA device 0
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       chromadb:
         condition: service_healthy
@@ -82,9 +94,8 @@ volumes:
 networks:
   chroma_net:
     name: chroma_net
-    # Rendre ce réseau accessible aux autres docker-compose
-    # (ex: ton chatbot existant)
-    # → dans l'autre docker-compose, déclare :
+    # Pour connecter d'autres docker-compose à ChromaDB :
+    # déclare dans l'autre compose :
     #   networks:
     #     chroma_net:
     #       external: true

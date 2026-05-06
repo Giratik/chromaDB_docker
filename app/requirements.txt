@@ -3,4 +3,9 @@ chromadb==0.5.3
 pandas==2.2.2
 pdfplumber==0.11.1
 Pillow==10.3.0
+numpy==1.26.4
+# PaddleOCR — GPU CUDA
+# paddlepaddle-gpu doit être installé VIA le Dockerfile (wheel CUDA spécifique)
+paddleocr==2.7.3
+# Tesseract fallback
 pytesseract==0.3.13
