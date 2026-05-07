@@ -67,11 +67,15 @@ def get_client():
 def get_embedding_fn():
     return embedding_functions.OllamaEmbeddingFunction(
         url=OLLAMA_HOST + "/api/embeddings",
-        model_name="nomic-embed-text"
+        model_name="embeddinggemma"
     )
 
 def get_collection(client, name):
-    return client.get_or_create_collection(name=name, embedding_function=get_embedding_fn())
+    return client.get_or_create_collection(
+        name=name, 
+        embedding_function=get_embedding_fn(),
+        metadata={"hnsw:space": "cosine"}
+    )
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 def fetch_all_lexique(collection):
@@ -351,7 +355,7 @@ else:
         for col, val, label in [
             (c1, total, "Chunks indexés"),
             (c2, len(sources), "Documents sources"),
-            (c3, "nomic-embed-text", "Modèle"),
+            (c3, "embeddinggemma", "Modèle"),
         ]:
             col.markdown(f'<div class="metric-card"><div class="metric-val">{val}</div><div class="metric-label">{label}</div></div>', unsafe_allow_html=True)
 
@@ -438,7 +442,7 @@ else:
 
                     pdf_bytes = uploaded.read()
                     with st.spinner("Extraction du texte…"):
-                        chunks = pdf_to_chunks(pdf_bytes, filename)
+                        chunks = pdf_to_chunks(pdf_bytes, filename, chunk_size=chunk_size, overlap=overlap)
 
                     if not chunks:
                         st.warning(f"  → Aucun texte extrait de {filename}.")

@@ -80,7 +80,7 @@ def get_client():
 def get_embedding_fn():
     return embedding_functions.OllamaEmbeddingFunction(
         url=OLLAMA_HOST + "/api/embeddings",
-        model_name="nomic-embed-text"
+        model_name="embeddinggemma"
     )
 
 @st.cache_resource
@@ -209,7 +209,7 @@ def render_result_pdf(r: dict):
     <div class="result-card pdf">
         <span class="tag tag-pdf">📄 PDF</span> {score}<br>
         <strong>{r['source']}</strong> — page {r['page']}
-        <div style="color:var(--text2);font-size:0.78rem;margin-top:0.4rem">{r['document'][:300]}{'…' if len(r['document']) > 300 else ''}</div>
+        <div style="color:var(--text2);font-size:0.78rem;margin-top:0.4rem">{r['document']}</div>
     </div>
     """, unsafe_allow_html=True)
 
