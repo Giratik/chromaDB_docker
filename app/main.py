@@ -1,3 +1,5 @@
+#/app/main.py
+
 import streamlit as st
 import chromadb
 from chromadb.utils import embedding_functions
@@ -102,6 +104,7 @@ def fetch_all_pdf(collection):
             "page": meta.get("page", ""),
             "chunk_idx": meta.get("chunk_idx", ""),
             "imported_at": meta.get("imported_at", ""),
+            "doc_date": meta.get("doc_date", ""),
             "extrait": (result["documents"][i][:120] + "…") if result["documents"] else "",
         })
     return rows
@@ -370,6 +373,7 @@ else:
                     "Fichier": src,
                     "Chunks": len(src_docs),
                     "Pages": f"{min(pages)}–{max(pages)}",
+                    "Date du doc": src_docs[0]["doc_date"] if src_docs and src_docs[0]["doc_date"] else "-",
                     "Importé le": src_docs[0]["imported_at"][:10] if src_docs else "",
                 })
             st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
@@ -394,7 +398,7 @@ else:
             st.caption(f"{len(filtered)} chunk(s)")
             if filtered:
                 st.dataframe(
-                    pd.DataFrame(filtered)[["source","page","chunk_idx","extrait"]],
+                    pd.DataFrame(filtered)[["source","doc_date","page","chunk_idx","extrait"]],
                     use_container_width=True, hide_index=True
                 )
 
@@ -417,9 +421,25 @@ else:
                 ["Ignorer (garder l'existant)", "Réindexer (remplacer)"]
             )
 
-            chunk_size = st.slider("Taille des chunks (caractères)", 200, 1000, 500, 50)
-            overlap    = st.slider("Overlap (caractères)", 0, 200, 100, 10)
+            chunk_size = st.slider("Taille des chunks (caractères)", 200, 1600, 1200, 100)
+            overlap    = st.slider("Overlap (caractères)", 100, 400, 300, 20)
 
+            st.markdown("---")
+            st.markdown("### 📅 Dates des documents AAAA/MM/JJ")
+            
+            # Recueillir les dates pour chaque fichier
+            doc_dates = {}
+            for uploaded in uploaded_files:
+                col_name, col_date = st.columns([2, 1])
+                with col_name:
+                    st.caption(f"📄 {uploaded.name}")
+                with col_date:
+                    doc_dates[uploaded.name] = st.date_input(
+                        label="Date",
+                        key=f"date_{uploaded.name}",
+                        label_visibility="collapsed"
+                    )
+            
             st.markdown("---")
             if st.button("📥 Lancer l'indexation"):
                 existing_ids = pdf_col.get()["ids"]
@@ -428,7 +448,10 @@ else:
 
                 for uploaded in uploaded_files:
                     filename = uploaded.name
-                    st.markdown(f"**⏳ {filename}**")
+                    doc_date = doc_dates.get(filename, None)
+                    date_str = doc_date.isoformat() if doc_date else ""
+                    
+                    st.markdown(f"**⏳ {filename}** — 📅 {date_str}")
 
                     # Mode réindexer : supprimer les chunks existants du fichier
                     if mode.startswith("Réindexer") and filename in all_sources:
@@ -449,6 +472,11 @@ else:
                         continue
 
                     ids = generate_ids(chunks, pdf_col.get()["ids"])
+
+                    # Ajouter la date du document aux métadonnées
+                    for chunk in chunks:
+                        if "doc_date" not in chunk["metadata"]:
+                            chunk["metadata"]["doc_date"] = date_str
 
                     prog = st.progress(0)
                     batch_size = 50
