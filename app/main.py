@@ -6,6 +6,7 @@ from chromadb.utils import embedding_functions
 import os
 import json
 import pandas as pd
+from datetime import datetime, timezone
 
 try:
     from pdf_engine import pdf_to_chunks, generate_ids, OCR_AVAILABLE
@@ -443,8 +444,13 @@ else:
             st.markdown("---")
             if st.button("📥 Lancer l'indexation"):
                 existing_ids = pdf_col.get()["ids"]
-                all_sources  = set(pdf_col.get(include=["metadatas"])["metadatas"][i].get("source","")
-                                   for i in range(len(existing_ids))) if existing_ids else set()
+                existing_metas = pdf_col.get(include=["metadatas"]).get("metadatas") or []
+                source_to_ids = {}
+                for idx, meta in enumerate(existing_metas):
+                    if meta and meta.get("source"):
+                        source = meta["source"]
+                        source_to_ids.setdefault(source, []).append(existing_ids[idx])
+                all_sources = set(source_to_ids.keys())
 
                 for uploaded in uploaded_files:
                     filename = uploaded.name
@@ -455,28 +461,44 @@ else:
 
                     # Mode réindexer : supprimer les chunks existants du fichier
                     if mode.startswith("Réindexer") and filename in all_sources:
-                        to_del = pdf_col.get(where={"source": filename})["ids"]
+                        to_del = source_to_ids.get(filename, [])
                         if to_del:
                             pdf_col.delete(ids=to_del)
                             st.caption(f"  → {len(to_del)} anciens chunks supprimés.")
+                            existing_ids = [i for i in existing_ids if i not in to_del]
                     elif mode.startswith("Ignorer") and filename in all_sources:
                         st.caption(f"  → déjà indexé, ignoré.")
                         continue
 
                     pdf_bytes = uploaded.read()
                     with st.spinner("Extraction du texte…"):
-                        chunks = pdf_to_chunks(pdf_bytes, filename, chunk_size=chunk_size, overlap=overlap)
+                        chunks = pdf_to_chunks(
+                            pdf_bytes,
+                            filename,
+                            chunk_size=chunk_size,
+                            overlap=overlap,
+                            doc_date=date_str,
+                        )
 
                     if not chunks:
                         st.warning(f"  → Aucun texte extrait de {filename}.")
                         continue
 
-                    ids = generate_ids(chunks, pdf_col.get()["ids"])
+                    ids = generate_ids(chunks, existing_ids)
+                    existing_ids.extend(ids)
 
-                    # Ajouter la date du document aux métadonnées
+                    # Garantir la présence de `doc_date` et `doc_date_ts` dans les métadatas
+                    ts_fallback = 0.0
+                    try:
+                        ts_fallback = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc).timestamp() if date_str else 0.0
+                    except Exception:
+                        ts_fallback = 0.0
                     for chunk in chunks:
-                        if "doc_date" not in chunk["metadata"]:
-                            chunk["metadata"]["doc_date"] = date_str
+                        meta = chunk.get("metadata", {})
+                        if "doc_date" not in meta or not meta.get("doc_date"):
+                            meta["doc_date"] = date_str
+                        if "doc_date_ts" not in meta:
+                            meta["doc_date_ts"] = float(meta.get("doc_date_ts") or ts_fallback or 0.0)
 
                     prog = st.progress(0)
                     batch_size = 50

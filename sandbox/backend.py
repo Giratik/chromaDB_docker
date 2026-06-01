@@ -45,6 +45,16 @@ def list_collections(chroma_client: chromadb.HttpClient) -> list[str]:
     return [c.name if hasattr(c, "name") else c for c in raw]
 
 
+def list_doc_dates(collection) -> list[str]:
+    result = collection.get(include=["metadatas"])
+    dates = {
+        meta.get("doc_date", "")
+        for meta in (result.get("metadatas") or [])
+        if meta and meta.get("doc_date")
+    }
+    return sorted(dates)
+
+
 def list_generative_models(ollama_client: Client) -> list[str]:
     raw = ollama_client.list()
     models = raw.models if hasattr(raw, "models") else raw.get("models", [])
@@ -116,8 +126,9 @@ def retrieve_context_hybrid(
     alpha: float,
     use_hyde: bool,
     use_expansion: bool,
-    use_reranker: bool = True,          # ← nouveau
-    reranker_model: str = "BAAI/bge-reranker-v2-gemma",  # ← nouveau
+    use_reranker: bool = True,
+    reranker_model: str = "BAAI/bge-reranker-v2-gemma",
+    doc_date_filter: str = "",
 ) -> tuple[list[str], list[tuple], list[dict]]:
     """
     Hybrid Search : fusion score vectoriel ChromaDB + score BM25.
@@ -137,9 +148,13 @@ def retrieve_context_hybrid(
 
     # ── Récupération vectorielle ──────────────────────────────────────────────
     candidates: dict[str, dict] = {}
+    where_filter = {"doc_date": doc_date_filter} if doc_date_filter else None
     for q in queries:
         try:
-            r = collection.query(query_texts=[q], n_results=per_query)
+            if where_filter:
+                r = collection.query(query_texts=[q], n_results=per_query, where=where_filter)
+            else:
+                r = collection.query(query_texts=[q], n_results=per_query)
             for i, doc_id in enumerate(r["ids"][0]):
                 dist = r["distances"][0][i]
                 if dist <= seuil and doc_id not in candidates:

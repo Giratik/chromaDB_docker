@@ -9,13 +9,15 @@ Extraction de texte depuis des PDFs :
     automatique d'orientation (use_angle_cls=True)
   - Fallback : pytesseract si PaddleOCR indisponible
   - Chunking avec overlap, coupure aux frontières naturelles
+  - Re-ranking par fraîcheur post-retrieval
+  - Formatage des chunks avec signal temporel visible pour le LLM
 """
 
 import re
 import io
 import numpy as np
-from datetime import datetime
-from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional, Tuple
 
 import pdfplumber
 from PIL import Image
@@ -190,11 +192,28 @@ def _chunk_text(
 
 # ─── PIPELINE ──────────────────────────────────────────────────────────────────
 
+def _date_str_to_ts(date_str: str) -> float:
+    """
+    Convertit une date ISO (YYYY-MM-DD ou YYYY-MM-DDTHH:MM:SS) en timestamp UTC.
+    Retourne 0.0 si la chaîne est vide ou invalide.
+    """
+    if not date_str:
+        return 0.0
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+        try:
+            dt = datetime.strptime(date_str[:len(fmt) + 2].strip(), fmt)
+            return dt.replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
 def pdf_to_chunks(
     pdf_bytes: bytes,
     filename: str,
     chunk_size: int = CHUNK_SIZE,
     overlap: int = CHUNK_OVERLAP,
+    doc_date: str = "",
 ) -> List[Dict[str, Any]]:
     """
     PDF bytes → liste de chunks prêts pour ChromaDB.
@@ -203,16 +222,19 @@ def pdf_to_chunks(
     {
         "document": str,
         "metadata": {
-            "source":      str,
-            "page":        int,
-            "chunk_idx":   int,
-            "imported_at": str,   # ISO UTC
+            "source":       str,
+            "page":         int,
+            "chunk_idx":    int,
+            "imported_at":  str,    # ISO UTC
+            "doc_date":     str,    # YYYY-MM-DD fourni à l'import
+            "doc_date_ts":  float,  # timestamp unix de doc_date (0 si absent)
         }
     }
     """
-    pages       = extract_pages(pdf_bytes)
-    imported_at = datetime.utcnow().isoformat()
-    all_chunks  = []
+    pages        = extract_pages(pdf_bytes)
+    imported_at  = datetime.now(timezone.utc).isoformat()
+    doc_date_ts  = _date_str_to_ts(doc_date)
+    all_chunks   = []
 
     for page_data in pages:
         for idx, chunk in enumerate(_chunk_text(page_data["text"], chunk_size, overlap)):
@@ -223,6 +245,8 @@ def pdf_to_chunks(
                     "page":        page_data["page_num"],
                     "chunk_idx":   idx,
                     "imported_at": imported_at,
+                    "doc_date":    doc_date,
+                    "doc_date_ts": doc_date_ts,
                 }
             })
 
@@ -231,15 +255,15 @@ def pdf_to_chunks(
 
 def generate_ids(chunks: List[Dict], existing_ids: List[str]) -> List[str]:
     """IDs stables et uniques : pdf__{slug}__p{page}__c{chunk_idx}"""
-    ids         = []
+    ids          = []
     existing_set = set(existing_ids)
 
     for c in chunks:
-        meta   = c["metadata"]
-        slug   = re.sub(r'[^a-zA-Z0-9]', '_', meta["source"])[:40]
-        base   = f"pdf__{slug}__p{meta['page']}__c{meta['chunk_idx']}"
+        meta      = c["metadata"]
+        slug      = re.sub(r'[^a-zA-Z0-9]', '_', meta["source"])[:40]
+        base      = f"pdf__{slug}__p{meta['page']}__c{meta['chunk_idx']}"
         candidate = base
-        suffix = 0
+        suffix    = 0
         while candidate in existing_set:
             suffix   += 1
             candidate = f"{base}_{suffix}"
@@ -247,3 +271,98 @@ def generate_ids(chunks: List[Dict], existing_ids: List[str]) -> List[str]:
         existing_set.add(candidate)
 
     return ids
+
+
+# ─── POST-RETRIEVAL : RE-RANKING & FORMATAGE ───────────────────────────────────
+
+def rerank_by_freshness(
+    chunks: List[Dict[str, Any]],
+    distances: Optional[List[float]] = None,
+    similarity_weight: float = 0.65,
+    freshness_weight: float = 0.35,
+    max_age_days: int = 365 * 5,
+) -> List[Dict[str, Any]]:
+    """
+    Re-classe les chunks ChromaDB par score combiné similarité + fraîcheur.
+
+    chunks    : liste de dicts {"document", "metadata", optionnel "distance"}
+    distances : distances cosinus retournées par ChromaDB (même ordre que chunks)
+                Si None, on utilise chunk.get("distance", 0.5)
+    Retourne la liste triée du plus pertinent au moins pertinent.
+    """
+    if not chunks:
+        return chunks
+
+    now_ts      = datetime.now(timezone.utc).timestamp()
+    max_age_sec = max_age_days * 86400
+
+    for i, c in enumerate(chunks):
+        # ── Score similarité ────────────────────────────────────────────────
+        dist = distances[i] if distances else c.get("distance", 0.5)
+        # ChromaDB cosine distance ∈ [0, 2] ; 0 = identique
+        sim_score = max(0.0, 1.0 - dist / 2.0)
+
+        # ── Score fraîcheur ─────────────────────────────────────────────────
+        meta          = c.get("metadata", {})
+        doc_ts        = float(meta.get("doc_date_ts") or 0)
+        imported_ts   = _date_str_to_ts(meta.get("imported_at", ""))
+        # Priorité : date du document > date d'import
+        ref_ts        = doc_ts if doc_ts > 0 else imported_ts
+        age_sec       = max(0.0, now_ts - ref_ts)
+        freshness     = max(0.0, 1.0 - age_sec / max_age_sec)
+
+        c["_sim_score"]       = round(sim_score, 4)
+        c["_freshness_score"] = round(freshness, 4)
+        c["_rerank_score"]    = round(
+            similarity_weight * sim_score + freshness_weight * freshness, 4
+        )
+
+    return sorted(chunks, key=lambda x: x["_rerank_score"], reverse=True)
+
+
+def format_chunk_for_llm(chunk: Dict[str, Any], rank: int = 0) -> str:
+    """
+    Formate un chunk pour qu'il soit injecté dans le contexte LLM.
+    La date et la source sont visibles dans le texte — le LLM peut
+    s'en servir explicitement pour arbitrer les contradictions.
+
+    Exemple de sortie :
+    ╔ [1] rapport_tarifaire_2024.pdf · p.3 · 2024-06-01 ══════════════
+    Le taux de TVA applicable est de 22 % à compter du 1er juin 2024.
+    ═══════════════════════════════════════════════════════════════════
+    """
+    meta    = chunk.get("metadata", {})
+    source  = meta.get("source", "inconnu")
+    page    = meta.get("page", "?")
+    date    = meta.get("doc_date") or meta.get("imported_at", "")[:10] or "date inconnue"
+    text    = chunk.get("document", "").strip()
+    label   = f"[{rank + 1}] {source} · p.{page} · {date}"
+    bar     = "═" * max(0, 68 - len(label))
+
+    return f"╔ {label} {bar}\n{text}\n"
+
+
+def format_chunks_for_llm(chunks: List[Dict[str, Any]]) -> str:
+    """
+    Assemble tous les chunks formatés + avertissement si plusieurs dates détectées.
+    """
+    if not chunks:
+        return ""
+
+    parts = [format_chunk_for_llm(c, i) for i, c in enumerate(chunks)]
+
+    # Avertissement de diversité temporelle
+    dates = sorted(set(
+        c.get("metadata", {}).get("doc_date", "")
+        for c in chunks
+        if c.get("metadata", {}).get("doc_date", "")
+    ))
+    if len(dates) > 1:
+        warning = (
+            "\n⚠️  CES EXTRAITS PROVIENNENT DE DOCUMENTS DE DATES DIFFÉRENTES "
+            f"({', '.join(dates)}). "
+            "En cas de contradiction, la source la plus récente fait foi.\n"
+        )
+        parts.insert(0, warning)
+
+    return "\n".join(parts)

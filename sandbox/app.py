@@ -127,6 +127,20 @@ def render_sidebar(chroma_client, ollama_client) -> dict:
         selected_collection = st.selectbox("Collection ChromaDB", collections)
         selected_model = st.selectbox("Modèle LLM Ollama", models)
 
+        try:
+            collection = rag.get_collection(chroma_client, selected_collection)
+            doc_dates = rag.list_doc_dates(collection)
+        except Exception:
+            doc_dates = []
+
+        st.markdown("---")
+        selected_doc_date = st.selectbox(
+            "Filtrer par date du document",
+            ["Toutes"] + doc_dates,
+            help="Si une date est sélectionnée, seuls les chunks issus de documents de cette date seront recherchés.",
+        )
+        selected_doc_date = "" if selected_doc_date == "Toutes" else selected_doc_date
+
         st.markdown("---")
         n_results = st.slider("Chunks à injecter", 1, 500, 250)
         seuil = st.slider("Seuil de distance (cosine)", 0.1, 1.0, 0.7, 0.05)
@@ -149,6 +163,7 @@ def render_sidebar(chroma_client, ollama_client) -> dict:
     return {
         "collection": selected_collection,
         "model": selected_model,
+        "doc_date_filter": selected_doc_date,
         "n_results": n_results,
         "seuil": seuil,
         "use_hyde": use_hyde,
@@ -192,6 +207,7 @@ def render_chat(cfg: dict, chroma_client, ollama_client):
                     use_hyde=cfg["use_hyde"],
                     use_expansion=cfg["use_expansion"],
                     use_reranker=cfg["use_reranker"],
+                    doc_date_filter=cfg.get("doc_date_filter", ""),
                 )
 
                 if not contexts:
