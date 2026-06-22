@@ -350,3 +350,102 @@ def rerank_chunks(
         reranked = reranked[:top_n]
 
     return reranked
+
+
+# ─── 1. QUERY REWRITING ───────────────────────────────────────────────────────
+ 
+def rewrite_query(
+    ollama_client,
+    model: str,
+    query: str,
+    chat_history: list[dict],
+) -> str:
+    """
+    Reformule la question de l'utilisateur en une query autonome et complète,
+    en tenant compte de l'historique de conversation.
+ 
+    Exemple :
+        Historique : "Où déposer l'accord d'intéressement ?"
+        Question   : "y a t il un délai ?"
+        → Résultat : "Quel est le délai de dépôt de l'accord d'intéressement ?"
+ 
+    Si la question est déjà autonome (pas de pronom anaphorique, pas d'ellipse),
+    le LLM la retourne telle quelle — pas de reformulation inutile.
+    """
+    if not chat_history:
+        # Pas d'historique → rien à résoudre
+        return query
+ 
+    # On formate les N derniers échanges (évite des prompts trop longs)
+    MAX_TURNS = 4
+    recent = chat_history[-(MAX_TURNS * 2):]
+    history_str = "\n".join(
+        f"{'Utilisateur' if m['role'] == 'user' else 'Assistant'} : {m['content']}"
+        for m in recent
+    )
+ 
+    prompt = (
+        "Tu es un assistant qui reformule des questions.\n"
+        "Voici l'historique récent de la conversation :\n"
+        f"{history_str}\n\n"
+        "Nouvelle question de l'utilisateur : « {query} »\n\n"
+        "Ta tâche : si cette question contient des pronoms, ellipses ou références "
+        "implicites à l'historique (ex: 'y a t il un délai ?', 'et pour lui ?', "
+        "'quel est ce montant ?'), reformule-la en incluant explicitement "
+"le sujet principal de la conversation et toute population ou cas particulier "
+"mentionné dans l'historique.\n"
+        "Si la question est déjà autonome, retourne-la EXACTEMENT telle quelle.\n"
+        "Retourne UNIQUEMENT la question reformulée, sans explication ni ponctuation "
+        "supplémentaire."
+    ).format(query=query)
+ 
+    try:
+        resp = ollama_client.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.0},
+        )
+        rewritten = resp["message"]["content"].strip().strip("«»\"'")
+        # Garde la query originale si la reformulation est vide ou aberrante
+        return rewritten if len(rewritten) > 5 else query
+    except Exception:
+        return query
+ 
+ 
+# ─── 2. STREAM ANSWER — version avec historique ───────────────────────────────
+ 
+def stream_answer(
+    ollama_client,
+    model: str,
+    system_prompt: str,
+    user_question: str,
+    chat_history: list[dict] | None = None,
+):
+    """
+    Générateur de tokens pour la réponse en streaming.
+ 
+    chat_history : liste de dicts {"role": "user"|"assistant", "content": str}
+                   représentant les tours PRÉCÉDENTS (sans le tour en cours).
+                   Si None ou vide → comportement identique à l'original.
+ 
+    Le system_prompt (contexte RAG) est injecté en premier message système.
+    L'historique est ensuite rejoué tel quel, puis la question courante est ajoutée.
+    """
+    MAX_HISTORY_TURNS = 6  # nb de tours (user+assistant) à conserver
+ 
+    messages = [{"role": "system", "content": system_prompt}]
+ 
+    if chat_history:
+        # Tronque pour rester dans le context window du modèle
+        trimmed = chat_history[-(MAX_HISTORY_TURNS * 2):]
+        messages.extend(trimmed)
+ 
+    messages.append({"role": "user", "content": user_question})
+ 
+    for chunk in ollama_client.chat(
+        model=model,
+        messages=messages,
+        stream=True,
+        options={"temperature": 0.0},
+    ):
+        yield chunk["message"]["content"]

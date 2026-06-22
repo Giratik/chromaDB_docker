@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Base CUDA 11.8 + cuDNN 8 — compatible PaddlePaddle-GPU 2.6.x
 # ─────────────────────────────────────────────────────────────────────────────
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -42,6 +42,7 @@ RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='fr', use_angle_c
 
 COPY main.py .
 COPY pdf_engine.py .
+COPY ee.pdf .
 
 EXPOSE 8501
 

@@ -1,5 +1,3 @@
-#/app/main.py
-
 import streamlit as st
 import chromadb
 from chromadb.utils import embedding_functions
@@ -19,8 +17,6 @@ except ImportError:
 CHROMA_HOST         = os.environ.get("CHROMA_HOST", "localhost")
 CHROMA_PORT         = int(os.environ.get("CHROMA_PORT", 8000))
 OLLAMA_HOST         = os.environ.get("OLLAMA_HOST", "http://10.75.12.5:11434")
-#COLLECTION_NAME     = "base_connaissances_globale_acronymes"
-#PDF_COLLECTION_NAME = "documents_pdf"
 
 st.set_page_config(page_title="ChromaDB Manager", page_icon="🧠", layout="wide")
 
@@ -106,6 +102,7 @@ def fetch_all_pdf(collection):
             "chunk_idx": meta.get("chunk_idx", ""),
             "imported_at": meta.get("imported_at", ""),
             "doc_date": meta.get("doc_date", ""),
+            "source_url": meta.get("source_url", ""), # ⬅️ MÉTADONNÉE URL
             "extrait": (result["documents"][i][:120] + "…") if result["documents"] else "",
         })
     return rows
@@ -121,11 +118,10 @@ except Exception as e:
     st.error(f"❌ Connexion ChromaDB impossible : {e}")
     st.stop()
 
-# Récupérer les collections existantes
+# Récupérer TOUTES les collections existantes sans filtre
 try:
-    # Gère les différentes versions de l'API ChromaDB (objets vs strings)
     raw_collections = client.list_collections()
-    existing_collections = [c.name if hasattr(c, 'name') else c for c in raw_collections]
+    existing_collections = [c.name if hasattr(c, 'name') else str(c) for c in raw_collections]
 except Exception as e:
     existing_collections = []
 
@@ -148,11 +144,116 @@ with st.sidebar:
         new_coll_name = st.text_input("Nom de la collection (sans espaces)")
         if st.button("Créer"):
             if new_coll_name:
-                get_collection(client, new_coll_name)
-                st.success(f"Collection '{new_coll_name}' créée !")
+                safe_name = new_coll_name.strip().replace(" ", "_")
+                get_collection(client, safe_name)
+                st.success(f"Collection '{safe_name}' créée !")
                 st.rerun()
+
+    with st.expander("📋 Dupliquer la collection"):
+        new_coll_name = st.text_input("Nom de la nouvelle collection (sans espaces)", key="dup_coll_name")
+        if st.button("Dupliquer", key="dup_button"):
+            if new_coll_name:
+                safe_name = new_coll_name.strip().replace(" ", "_")
+                if safe_name == selected_collection:
+                    st.error("Le nom de la nouvelle collection doit être différent de l'original.")
+                else:
+                    try:
+                        # Get source collection
+                        source_collection = get_collection(client, selected_collection)
+                        st.info(f"⏳ Accès à la collection source: {selected_collection}")
+
+                        # Create new collection
+                        target_collection = get_collection(client, safe_name)
+                        st.info(f"⏳ Création de la collection cible: {safe_name}")
+
+                        # Get all data from source collection - try with embeddings first
+                        try:
+                            st.info("⏳ Récupération des données avec embeddings...")
+                            source_data = source_collection.get(include=["documents", "metadatas", "embeddings"])
+                        except Exception as e1:
+                            st.warning(f"⚠️ Échec avec embeddings: {str(e1)}, tentative sans embeddings...")
+                            # Fallback without embeddings if that fails
+                            source_data = source_collection.get(include=["documents", "metadatas"])
+
+                        st.info(f"⏳ Données récupérées: {len(source_data.get('ids', []))} entrées")
+
+                        if source_data["ids"]:
+                            # Prepare data for target collection
+                            add_params = {
+                                "documents": source_data["documents"],
+                                "metadatas": source_data["metadatas"],
+                                "ids": source_data["ids"]
+                            }
+
+                            # Only include embeddings if they exist and are valid
+                            if "embeddings" in source_data and source_data["embeddings"]:
+                                add_params["embeddings"] = source_data["embeddings"]
+
+                            # Add all data to target collection
+                            st.info("⏳ Copie des données vers la nouvelle collection...")
+                            target_collection.add(**add_params)
+                            st.success(f"Collection '{selected_collection}' dupliquée vers '{safe_name}' avec {len(source_data['ids'])} entrées!")
+                        else:
+                            st.success(f"Collection '{selected_collection}' dupliquée vers '{safe_name}' (collection vide).")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de la duplication: {str(e)}")
+                        st.error("💡 Conseil: Essayez de créer une nouvelle collection manuellement et copiez les données si possible.")
+
+    with st.expander("✏️ Renommer la collection"):
+        new_coll_name = st.text_input("Nouveau nom pour la collection (sans espaces)", key="rename_coll_name")
+        if st.button("Renommer", key="rename_button"):
+            if new_coll_name:
+                safe_name = new_coll_name.strip().replace(" ", "_")
+                if safe_name == selected_collection:
+                    st.error("Le nouveau nom doit être différent de l'actuel.")
+                else:
+                    try:
+                        # Get source collection
+                        source_collection = get_collection(client, selected_collection)
+                        st.info(f"⏳ Accès à la collection source: {selected_collection}")
+
+                        # Get all data from source collection - try with embeddings first
+                        try:
+                            st.info("⏳ Récupération des données avec embeddings...")
+                            source_data = source_collection.get(include=["documents", "metadatas", "embeddings"])
+                        except Exception as e1:
+                            st.warning(f"⚠️ Échec avec embeddings: {str(e1)}, tentative sans embeddings...")
+                            # Fallback without embeddings if that fails
+                            source_data = source_collection.get(include=["documents", "metadatas"])
+
+                        st.info(f"⏳ Données récupérées: {len(source_data.get('ids', []))} entrées")
+
+                        # Create new collection with new name
+                        target_collection = get_collection(client, safe_name)
+                        st.info(f"⏳ Création de la collection cible: {safe_name}")
+
+                        # Copy all data to new collection
+                        if source_data["ids"]:
+                            # Prepare data for target collection
+                            add_params = {
+                                "documents": source_data["documents"],
+                                "metadatas": source_data["metadatas"],
+                                "ids": source_data["ids"]
+                            }
+
+                            # Only include embeddings if they exist and are valid
+                            if "embeddings" in source_data and source_data["embeddings"]:
+                                add_params["embeddings"] = source_data["embeddings"]
+
+                            st.info("⏳ Copie des données vers la nouvelle collection...")
+                            target_collection.add(**add_params)
+
+                        # Delete old collection
+                        st.info("⏳ Suppression de l'ancienne collection...")
+                        client.delete_collection(selected_collection)
+
+                        st.success(f"Collection '{selected_collection}' renommée en '{safe_name}'!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors du renommage: {str(e)}")
+                        st.error("💡 Conseil: Essayez de créer une nouvelle collection manuellement et copiez les données si possible.")
     st.markdown("---")
-    # -----------------------------------------
 
     section = st.radio("Section", ["📚 Lexique", "📄 Documents PDF"], label_visibility="collapsed")
     st.markdown("---")
@@ -162,20 +263,11 @@ with st.sidebar:
             "📊 Dashboard", "📋 Parcourir", "➕ Ajouter",
             "✏️ Modifier", "🗑️ Supprimer", "Supprimer la collection", "📥 Import JSON", "📤 Export"
         ], label_visibility="collapsed")
-        #st.markdown(f"<div style='color:var(--text2);font-size:0.75rem;'>Collection<br><code style='color:var(--accent)'>{COLLECTION_NAME}</code></div>", unsafe_allow_html=True)
     else:
         page = st.radio("Navigation — PDF", [
             "📊 Dashboard PDF", "📋 Parcourir PDF",
-            "📥 Importer PDF", "🗑️ Supprimer PDF", "Supprimer la collection"
+            "📥 Importer PDF", "✏️ Modifier PDF", "🗑️ Supprimer PDF", "Supprimer la collection"
         ], label_visibility="collapsed")
-        #t.markdown(f"<div style='color:var(--text2);font-size:0.75rem;'>Collection<br><code style='color:var(--accent)'>{PDF_COLLECTION_NAME}</code></div>", unsafe_allow_html=True)
-
-# ─── CONNEXION ────────────────────────────────────────────────────────────────
-try:
-    client = get_client()
-except Exception as e:
-    st.error(f"❌ Connexion ChromaDB impossible : {e}")
-    st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION LEXIQUE
@@ -184,7 +276,6 @@ except Exception as e:
 if section == "📚 Lexique":
     collection = get_collection(client, selected_collection)
 
-    # ── Dashboard ─────────────────────────────────────────────────────────────
     if page == "📊 Dashboard":
         st.title("Dashboard — Lexique")
         total = collection.count()
@@ -203,7 +294,6 @@ if section == "📚 Lexique":
         else:
             st.info("Base vide.")
 
-    # ── Parcourir ─────────────────────────────────────────────────────────────
     elif page == "📋 Parcourir":
         st.title("Parcourir le lexique")
         all_docs = fetch_all_lexique(collection)
@@ -215,7 +305,6 @@ if section == "📚 Lexique":
         if all_docs:
             st.dataframe(pd.DataFrame(all_docs)[["id","acronyme","signification"]], use_container_width=True, hide_index=True)
 
-    # ── Ajouter ───────────────────────────────────────────────────────────────
     elif page == "➕ Ajouter":
         st.title("Ajouter une entrée")
         with st.form("form_add"):
@@ -239,7 +328,6 @@ if section == "📚 Lexique":
                     )
                     st.success(f"✅ {acro.upper()} ajouté (id {new_id}).")
 
-    # ── Modifier ──────────────────────────────────────────────────────────────
     elif page == "✏️ Modifier":
         st.title("Modifier une entrée")
         all_docs = fetch_all_lexique(collection)
@@ -260,7 +348,6 @@ if section == "📚 Lexique":
                 )
                 st.success(f"✅ Entrée `{chosen['id']}` mise à jour.")
 
-    # ── Supprimer ─────────────────────────────────────────────────────────────
     elif page == "🗑️ Supprimer":
         st.title("Supprimer")
         all_docs = fetch_all_lexique(collection)
@@ -281,17 +368,14 @@ if section == "📚 Lexique":
                         collection.delete(ids=collection.get()["ids"])
                         st.success("Collection vidée.")
 
-    # ── Supprimer la collection─────────────────────────────────────────────────────────────
-        # Supprimer Collection
     elif page == "Supprimer la collection":
         st.title("Supprimer la collection et son contenu")
-        st.warning(f"Supprime définitivement la collection **{selected_collection}** de ChromaDB (pas seulement son contenu).")
+        st.warning(f"Supprime définitivement la collection **{selected_collection}** de ChromaDB.")
         if st.text_input("Tapez SUPPRIMER", key="del_col_lex") == "SUPPRIMER":
             if st.button("🔥 Supprimer la collection"):
                 client.delete_collection(selected_collection)
                 st.success(f"✅ Collection `{selected_collection}` supprimée.")
 
-    # ── Import JSON ───────────────────────────────────────────────────────────
     elif page == "📥 Import JSON":
         st.title("Import JSON")
         mode = st.radio("Mode", ["Fusionner", "Remplacer tout"])
@@ -326,7 +410,6 @@ if section == "📚 Lexique":
                     prog.progress((i+1)/len(data))
                 st.success(f"✅ {added} ajoutées, {skipped} ignorées.")
 
-    # ── Export ────────────────────────────────────────────────────────────────
     elif page == "📤 Export":
         st.title("Exporter le lexique")
         all_docs = fetch_all_lexique(collection)
@@ -341,7 +424,6 @@ if section == "📚 Lexique":
                 df = pd.DataFrame(all_docs)[["acronyme","signification"]]
                 st.download_button("⬇️ Télécharger CSV", df.to_csv(index=False).encode(), "lexique.csv", "text/csv")
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION PDF
 # ══════════════════════════════════════════════════════════════════════════════
@@ -349,7 +431,6 @@ if section == "📚 Lexique":
 else:
     pdf_col = get_collection(client, selected_collection)
 
-    # ── Dashboard PDF ─────────────────────────────────────────────────────────
     if page == "📊 Dashboard PDF":
         st.title("Dashboard — Documents PDF")
         total = pdf_col.count()
@@ -376,10 +457,10 @@ else:
                     "Pages": f"{min(pages)}–{max(pages)}",
                     "Date du doc": src_docs[0]["doc_date"] if src_docs and src_docs[0]["doc_date"] else "-",
                     "Importé le": src_docs[0]["imported_at"][:10] if src_docs else "",
+                    "source": src_docs[0]["source_url"]if src_docs and src_docs[0]["source_url"] else "-"
                 })
             st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
 
-    # ── Parcourir PDF ─────────────────────────────────────────────────────────
     elif page == "📋 Parcourir PDF":
         st.title("Parcourir les chunks PDF")
         all_docs = fetch_all_pdf(pdf_col)
@@ -398,12 +479,15 @@ else:
 
             st.caption(f"{len(filtered)} chunk(s)")
             if filtered:
+                # ⬅️ Colonne URL affichée comme lien cliquable
                 st.dataframe(
-                    pd.DataFrame(filtered)[["source","doc_date","page","chunk_idx","extrait"]],
-                    use_container_width=True, hide_index=True
+                    pd.DataFrame(filtered)[["source","doc_date","source_url","page","chunk_idx","extrait"]],
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "source_url": st.column_config.LinkColumn("Lien Source", display_text="Ouvrir le lien")
+                    }
                 )
 
-    # ── Importer PDF ──────────────────────────────────────────────────────────
     elif page == "📥 Importer PDF":
         st.title("Importer des PDFs")
 
@@ -423,22 +507,24 @@ else:
             )
 
             chunk_size = st.slider("Taille des chunks (caractères)", 200, 1600, 1200, 100)
-            overlap    = st.slider("Overlap (caractères)", 100, 400, 300, 20)
+            overlap    = st.slider("Overlap (caractères)", 20, 400, 300, 20)
 
             st.markdown("---")
-            st.markdown("### 📅 Dates des documents AAAA/MM/JJ")
+            st.markdown("### 📅 Dates et Liens des documents")
             
-            # Recueillir les dates pour chaque fichier
             doc_dates = {}
+            doc_urls = {} # ⬅️ Saisie de l'URL
             for uploaded in uploaded_files:
-                col_name, col_date = st.columns([2, 1])
+                col_name, col_date, col_url = st.columns([2, 1, 2])
                 with col_name:
                     st.caption(f"📄 {uploaded.name}")
                 with col_date:
                     doc_dates[uploaded.name] = st.date_input(
-                        label="Date",
-                        key=f"date_{uploaded.name}",
-                        label_visibility="collapsed"
+                        label="Date", key=f"date_{uploaded.name}", label_visibility="collapsed"
+                    )
+                with col_url:
+                    doc_urls[uploaded.name] = st.text_input(
+                        label="URL", key=f"url_{uploaded.name}", placeholder="https://...", label_visibility="collapsed"
                     )
             
             st.markdown("---")
@@ -456,10 +542,10 @@ else:
                     filename = uploaded.name
                     doc_date = doc_dates.get(filename, None)
                     date_str = doc_date.isoformat() if doc_date else ""
+                    url_str = doc_urls.get(filename, "").strip() # ⬅️ Récupération de l'URL
                     
                     st.markdown(f"**⏳ {filename}** — 📅 {date_str}")
 
-                    # Mode réindexer : supprimer les chunks existants du fichier
                     if mode.startswith("Réindexer") and filename in all_sources:
                         to_del = source_to_ids.get(filename, [])
                         if to_del:
@@ -478,6 +564,7 @@ else:
                             chunk_size=chunk_size,
                             overlap=overlap,
                             doc_date=date_str,
+                            source_url=url_str, # ⬅️ Injection de l'URL dans le moteur
                         )
 
                     if not chunks:
@@ -487,18 +574,20 @@ else:
                     ids = generate_ids(chunks, existing_ids)
                     existing_ids.extend(ids)
 
-                    # Garantir la présence de `doc_date` et `doc_date_ts` dans les métadatas
                     ts_fallback = 0.0
                     try:
                         ts_fallback = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc).timestamp() if date_str else 0.0
                     except Exception:
                         ts_fallback = 0.0
+                        
                     for chunk in chunks:
                         meta = chunk.get("metadata", {})
                         if "doc_date" not in meta or not meta.get("doc_date"):
                             meta["doc_date"] = date_str
                         if "doc_date_ts" not in meta:
                             meta["doc_date_ts"] = float(meta.get("doc_date_ts") or ts_fallback or 0.0)
+                        if "source_url" not in meta:
+                            meta["source_url"] = url_str
 
                     prog = st.progress(0)
                     batch_size = 50
@@ -513,7 +602,38 @@ else:
 
                     st.success(f"  ✅ {len(chunks)} chunks indexés ({len(set(c['metadata']['page'] for c in chunks))} pages).")
 
-    # ── Supprimer PDF ─────────────────────────────────────────────────────────
+    # ── Modifier PDF (URL) ────────────────────────────────────────────────────
+    elif page == "✏️ Modifier PDF":
+        st.title("Modifier les métadonnées d'un PDF")
+        all_docs = fetch_all_pdf(pdf_col)
+        if not all_docs:
+            st.info("Aucun document indexé.")
+        else:
+            sources = sorted(set(r["source"] for r in all_docs))
+            sel_src = st.selectbox("Sélectionner le document à modifier", sources)
+            
+            src_chunks = [r for r in all_docs if r["source"] == sel_src]
+            current_url = src_chunks[0].get("source_url", "") if src_chunks else ""
+            
+            with st.form("form_edit_pdf"):
+                st.markdown(f"**Document :** `{sel_src}` ({len(src_chunks)} chunks)")
+                new_url = st.text_input("Lien source (URL)", value=current_url, placeholder="https://...")
+                ok = st.form_submit_button("💾 Mettre à jour l'URL")
+                
+            if ok:
+                ids_to_update = [r["id"] for r in src_chunks]
+                existing_metadatas = pdf_col.get(ids=ids_to_update)["metadatas"]
+                
+                for meta in existing_metadatas:
+                    meta["source_url"] = new_url.strip()
+                
+                pdf_col.update(
+                    ids=ids_to_update,
+                    metadatas=existing_metadatas
+                )
+                st.success(f"✅ URL mise à jour avec succès pour les {len(ids_to_update)} chunks du document `{sel_src}` !")
+                st.rerun()
+
     elif page == "🗑️ Supprimer PDF":
         st.title("Supprimer des documents PDF")
         all_docs = fetch_all_pdf(pdf_col)
@@ -538,11 +658,12 @@ else:
                     if st.button("💣 Vider"):
                         pdf_col.delete(ids=pdf_col.get()["ids"])
                         st.success("Collection PDF vidée.")
-    # Supprimer Collection
-    elif page == " Supprimer la collection":
+                        
+    elif page == "Supprimer la collection":
         st.title("Supprimer la collection et son contenu")
         st.warning(f"Supprime définitivement la collection **{selected_collection}** de ChromaDB.")
         if st.text_input("Tapez SUPPRIMER", key="del_col_pdf") == "SUPPRIMER":
             if st.button("🔥 Supprimer la collection PDF"):
                 client.delete_collection(selected_collection)
                 st.success(f"✅ Collection `{selected_collection}` supprimée.")
+                st.rerun()

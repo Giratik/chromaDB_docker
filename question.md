@@ -73,3 +73,33 @@ Assurez-vous que les réponses sont cohérentes avec le contexte global du docum
 Testez la réactivité aux questions hors contexte :
 
 Posez des questions qui ne sont pas directement dans le document (ex. : "Comment est calculé le CET pour un salarié à temps partiel ?") pour voir si le système sait reconnaître ses limites.
+
+
+
+
+Question	Réponse Attendue
+Quelle est la nouvelle valeur faciale des titres restaurant d'Eau de Paris ?	La valeur faciale des titres restaurant est portée à 10,83 € (au lieu de 8,90 €).
+À partir de quelle date la revalorisation des frais de repas prend-elle effet ?	La revalorisation prend effet le 1er avril 2023.
+Quel est le montant de l'indemnité forfaitaire de repas pour les salariés utilisant la carte de cantine ?	Le montant brut mensuel de l'indemnité forfaitaire de repas est porté à 72 €.
+Quel est le montant de la subvention repas pour les restaurants ASPP ?	La subvention des frais d'admission de repas pour les salariés déjeunant dans un restaurant ASPP est portée à 6,50 € par repas.
+❓ Niveau 2 : Comparatives et Contextuelles
+Question	Réponse Attendue
+Quelle était la valeur faciale des titres restaurant avant le 1er avril 2023 ?	Avant cette date, la valeur faciale des titres restaurant était fixée à 8,90 €.
+Comment a évolué la prise en charge des frais de repas dans les restaurants ASPP ?	La subvention des frais d'admission est passée de 5,34 € à 6,50 € par repas.
+Quelles sont les conditions pour bénéficier de l'indemnité forfaitaire de repas pour les salariés en astreinte ?	Le salarié doit réaliser une astreinte avec déplacement sur site de trois heures et doit choisir le remboursement des frais de repas sur justificatif.
+Quels sont les deux types de frais de repas qui bénéficient d'une revalorisation spécifique pour les salariés en astreinte ?	Il s'agit de l'indemnité forfaitaire pour l'astreinte et la contribution aux frais de repas liés à l'astreinte.
+❓ Niveau 3 : Synthèse et Processus
+Question	Réponse Attendue
+Quels sont les trois principaux dispositifs de frais de repas qui font l'objet d'une revalorisation dans cet accord ?	Les trois dispositifs sont : 1) Les titres restaurant ; 2) La subvention des frais d'admission dans les restaurants ASPP ; et 3) L'indemnité forfaitaire de repas (carte de cantine et astreinte).
+Comment l'accord sera-t-il rendu public, selon le document ?	L'accord sera déposé auprès de la DREETS et rendu public sur la base de données nationales, et diffusé sur l'intranet de la Régie.
+Quel est le calcul du forfait mensuel moyen de repas, et combien de repas est pris en compte ?	Le forfait mensuel moyen est calculé en divisant l'indemnité forfaitaire de repas (72 €) par 18 repas.
+Qui sont les parties signataires de cet accord ?	Les parties signataires sont : EPIC Eau de Paris, le syndicat CFTC, CGT Epic Eau de Paris, syndicat SOLIDAIRES Eau de Paris, et syndicat CFE - CGC.
+💡 Niveau Avancé : Test de Limites
+Question	Réponse Attendue
+L'accord est-il limité dans le temps ?	Non, l'accord est conclu pour durée indéterminée.
+Si un salarié utilise les frais de repas pour une obligation de service, comment est calculé le remboursement ?	Le remboursement est réduit au prorata du nombre de repas remboursés.
+Pouvez-vous détailler la répartition de prise en charge pour les titres restaurant ?	La prise en charge est maintenue à 60 % pour l'employeur (soit 6,50 €) et 40 % pour le salarié (soit 4,33 €).
+
+
+quel est le délai pour qu'un nouveau puisse demander à télétravailler ?
+et pour les alternants et stagiaires ?

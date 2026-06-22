@@ -48,6 +48,7 @@ h2,h3{font-family:'Space Mono',monospace;color:var(--accent)!important;}
 .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:0.72rem;font-family:'Space Mono',monospace;}
 .badge-ok{background:#1a3a2a;color:var(--accent2);border:1px solid #2a5a3a;}
 .badge-err{background:#3a1a1a;color:var(--danger);border:1px solid #5a2a2a;}
+.rewrite-badge{font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--text2);margin-bottom:0.5rem;padding:2px 8px;border-left:2px solid var(--accent);background:var(--surface2);}
 hr{border-color:var(--border)!important;}
 </style>
 """, unsafe_allow_html=True)
@@ -76,7 +77,6 @@ def render_chunk_card(chunk: dict):
     bm25 = chunk["bm25_score"]
     doc_date = chunk.get("doc_date", "")
     rerank = chunk.get("rerank_score", 0.0)
-    
 
     if chunk_type == "pdf":
         tag_cls, card_cls, label = "tag-pdf", "pdf", "📄 PDF"
@@ -195,10 +195,29 @@ def render_chat(cfg: dict, chroma_client, ollama_client):
                 st.error(f"Impossible de charger la collection : {e}")
                 return
 
+            # ── 1. Réécriture contextuelle ────────────────────────────────────
+            # On résout les ellipses/pronoms AVANT d'interroger ChromaDB.
+            # L'historique passé = tous les messages sauf le dernier (déjà ajouté).
+            history_for_rewrite = st.session_state.messages[:-1]
+            standalone_query = rag.rewrite_query(
+                ollama_client=ollama_client,
+                model=cfg["model"],
+                query=prompt,
+                chat_history=history_for_rewrite,
+            )
+
+            # Affiche la query reformulée si elle diffère de l'originale
+            if standalone_query.lower().strip() != prompt.lower().strip():
+                st.markdown(
+                    f"<div class='rewrite-badge'>🔄 Query : {standalone_query}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ── 2. Recherche hybride sur la query autonome ────────────────────
             with st.status("🔍 Recherche dans les documents...", expanded=True) as status:
                 contexts, sources, detailed_chunks = rag.retrieve_context_hybrid(
                     collection=collection,
-                    query=prompt,
+                    query=standalone_query,          # ← query reformulée
                     ollama_client=ollama_client,
                     model=cfg["model"],
                     n_results=cfg["n_results"],
@@ -223,18 +242,31 @@ def render_chat(cfg: dict, chroma_client, ollama_client):
 
                 st.session_state.last_chunks = detailed_chunks
 
+            # ── 3. Génération avec historique ─────────────────────────────────
+            # On passe l'historique des échanges précédents au LLM pour que sa
+            # réponse soit cohérente avec la conversation (sans le message en cours).
             placeholder = st.empty()
             full_response = ""
             system_prompt = rag.build_system_prompt(context_str)
 
             try:
-                for token in rag.stream_answer(ollama_client, cfg["model"], system_prompt, prompt):
+                for token in rag.stream_answer(
+                    ollama_client=ollama_client,
+                    model=cfg["model"],
+                    system_prompt=system_prompt,
+                    user_question=prompt,            # ← question originale au LLM
+                    chat_history=history_for_rewrite, # ← historique injecté
+                ):
                     full_response += token
                     placeholder.markdown(full_response + "▌")
                 placeholder.markdown(full_response)
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
+
             except Exception as e:
                 st.error(f"Erreur avec Ollama : {e}")
+                return
+
+            # ── 4. Sauvegarde dans l'historique ──────────────────────────────
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
 
 
 # ─── COLONNE CHUNKS ───────────────────────────────────────────────────────────

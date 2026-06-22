@@ -26,11 +26,13 @@ from PIL import Image
 try:
     from paddleocr import PaddleOCR
     _paddle = PaddleOCR(
-        use_angle_cls=True,   # détecte et corrige l'orientation (0/90/180/270°)
-        lang="fr",
-        use_gpu=True,
-        show_log=False,
-    )
+    use_angle_cls=True,
+    lang="fr",
+    use_gpu=True,
+    show_log=False,  # Désactive les logs pour éviter le spam
+
+
+)
     PADDLE_AVAILABLE = True
 except Exception:
     _paddle = None
@@ -51,6 +53,64 @@ CHUNK_OVERLAP    = 100
 MIN_NATIVE_CHARS = 30   # seuil texte natif : en dessous → OCR
 
 
+
+
+
+
+
+
+
+
+# pré traitement
+
+def _preprocess_image_for_ocr(img: Image.Image) -> Image.Image:
+    """
+    Prétraite une image PIL pour améliorer l'OCR :
+    - Conversion en niveaux de gris
+    - Binarisation adaptative (seuillage)
+    - Déskew (correction de rotation)
+    - Nettoyage (dilation/érosion pour fusionner les caractères)
+    """
+    import cv2
+    import numpy as np
+
+    # Convertir en numpy array (niveaux de gris)
+    img_np = np.array(img.convert("L"))
+
+    # Binarisation adaptative (meilleure pour les documents scannés)
+    binary = cv2.adaptiveThreshold(
+        img_np, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        11, 2
+    )
+
+    # Déskew (correction de rotation)
+    coords = np.column_stack(np.where(binary > 0))
+    if coords.size > 0:
+        angle = cv2.minAreaRect(coords)[-1]
+        if angle < -45:
+            angle = -(90 + angle)
+        else:
+            angle = -angle
+        (h, w) = binary.shape[:2]
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        binary = cv2.warpAffine(
+            binary, M, (w, h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE
+        )
+
+    # Nettoyage : dilation pour fusionner les caractères proches
+    kernel = np.ones((2, 2), np.uint8)
+    binary = cv2.dilate(binary, kernel, iterations=1)
+
+    # Retourner en PIL Image
+    return Image.fromarray(cv2.bitwise_not(binary))  # Inverser pour fond blanc
+
+
+
 # ─── EXTRACTION ────────────────────────────────────────────────────────────────
 
 def _pil_to_numpy(img: Image.Image) -> np.ndarray:
@@ -60,19 +120,52 @@ def _pil_to_numpy(img: Image.Image) -> np.ndarray:
 
 def _ocr_paddle(img: Image.Image) -> str:
     """
-    OCR via PaddleOCR.
-    use_angle_cls=True corrige automatiquement les pages paysage/verticale.
-    Retourne le texte concaténé avec scores de confiance filtrés.
+    OCR via PaddleOCR avec prétraitement et post-traitement.
+    - Corrige l'orientation (use_angle_cls=True)
+    - Fusionne les lignes segmentées
+    - Nettoie les erreurs de caractères
     """
-    arr = _pil_to_numpy(img)
+    # 1. Prétraitement
+    processed_img = _preprocess_image_for_ocr(img)
+    arr = _pil_to_numpy(processed_img)
+
+    # 2. OCR avec Paddle
     result = _paddle.ocr(arr, cls=True)
     lines = []
+
     if result and result[0]:
+        # 3. Extraction et filtrage par confiance
         for line in result[0]:
             text, confidence = line[1]
-            if confidence >= 0.5:          # ignorer les détections douteuses
+            if confidence >= 0.5:  # Seuil de confiance
                 lines.append(text)
-    return "\n".join(lines)
+
+    # 4. Post-traitement
+    full_text = "\n".join(lines)
+
+    # Corriger les erreurs courantes de PaddleOCR
+    full_text = (
+        full_text
+        .replace("ä", "à")
+        .replace("á", "à")
+        .replace("xuvre", "œuvre")
+        .replace("I'", "l'")
+        .replace("critére", "critère")
+        .replace("hirarchique", "hiérarchique")
+        .replace("täches", "tâches")
+        .replace(" á ", " à ")
+        .replace(" ä ", " à ")
+        .replace("|", "I")
+    )
+
+    # Fusionner les lignes trop proches (éviter les coupures)
+    full_text = re.sub(r'\n([a-z])', r' \1', full_text)  # "mot\nsuivant" → "mot suivant"
+    full_text = re.sub(r'(\w)\n(\w)', r'\1\2', full_text)  # "mot\nsuivant" → "motsuivant" (à affiner)
+
+    # Nettoyage final
+    full_text = re.sub(r' {2,}', ' ', full_text).strip()
+
+    return full_text
 
 
 def _ocr_tesseract(img: Image.Image) -> str:
@@ -97,7 +190,8 @@ def _extract_page_text(page) -> str:
     """
     text = (page.extract_text() or "").strip()
 
-    if len(text) >= MIN_NATIVE_CHARS:
+    # Si le texte natif est suffisant ET contient des mots valides (pas juste des métadonnées)
+    if len(text) >= MIN_NATIVE_CHARS and re.search(r'[a-zA-Zàâäéèêëîïôöùûüÿæœç]{10,}', text):
         return text
 
     # Rasteriser la page pour l'OCR
@@ -127,18 +221,19 @@ def _extract_page_text(page) -> str:
 
 
 def extract_pages(pdf_bytes: bytes) -> List[Dict[str, Any]]:
-    """Retourne [{page_num, text}] pour chaque page non vide du PDF."""
     pages = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            raw = _extract_page_text(page)
-            # Nettoyage
-            text = re.sub(r'\n{3,}', '\n\n', raw)
-            text = re.sub(r' {2,}', ' ', text).strip()
-            if text:
-                pages.append({"page_num": i, "text": text})
+            try:
+                raw = _extract_page_text(page)
+                text = re.sub(r'\n{3,}', '\n\n', raw)
+                text = re.sub(r' {2,}', ' ', text).strip()
+                if text:
+                    pages.append({"page_num": i, "text": text})
+            except Exception as e:
+                print(f"⚠️ Erreur sur la page {i}: {e}")
+                continue  # Passe à la page suivante
     return pages
-
 
 # ─── CHUNKING ──────────────────────────────────────────────────────────────────
 
@@ -169,7 +264,7 @@ def _chunk_text(
             cut = para + 2
 
         if cut == -1:
-            for punct in ['. ', '! ', '? ', '.\n']:
+            for punct in ['. ', '! ', '? ', '.\n', ', ']:
                 s = slice_.rfind(punct)
                 if s > chunk_size // 2:
                     cut = s + len(punct)
@@ -208,12 +303,14 @@ def _date_str_to_ts(date_str: str) -> float:
     return 0.0
 
 
+
 def pdf_to_chunks(
     pdf_bytes: bytes,
     filename: str,
     chunk_size: int = CHUNK_SIZE,
     overlap: int = CHUNK_OVERLAP,
     doc_date: str = "",
+    source_url: str = "", # ⬅️ NOUVEAU PARAMÈTRE
 ) -> List[Dict[str, Any]]:
     """
     PDF bytes → liste de chunks prêts pour ChromaDB.
@@ -247,6 +344,7 @@ def pdf_to_chunks(
                     "imported_at": imported_at,
                     "doc_date":    doc_date,
                     "doc_date_ts": doc_date_ts,
+                    "source_url":  source_url, # ⬅️ NOUVELLE MÉTADONNÉE
                 }
             })
 
@@ -254,18 +352,20 @@ def pdf_to_chunks(
 
 
 def generate_ids(chunks: List[Dict], existing_ids: List[str]) -> List[str]:
-    """IDs stables et uniques : pdf__{slug}__p{page}__c{chunk_idx}"""
-    ids          = []
+    """IDs stables et uniques : pdf__{slug}__p{page}__c{chunk_idx}__{timestamp}"""
+    ids = []
     existing_set = set(existing_ids)
+    # Timestamp court pour garantir l'unicité lors d'une réindexation
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for c in chunks:
-        meta      = c["metadata"]
-        slug      = re.sub(r'[^a-zA-Z0-9]', '_', meta["source"])[:40]
-        base      = f"pdf__{slug}__p{meta['page']}__c{meta['chunk_idx']}"
+        meta = c["metadata"]
+        slug = re.sub(r'[^a-zA-Z0-9]', '_', meta["source"])[:40]
+        base = f"pdf__{slug}__p{meta['page']}__c{meta['chunk_idx']}__{ts}"
         candidate = base
-        suffix    = 0
+        suffix = 0
         while candidate in existing_set:
-            suffix   += 1
+            suffix += 1
             candidate = f"{base}_{suffix}"
         ids.append(candidate)
         existing_set.add(candidate)

@@ -9,3 +9,4 @@ numpy==1.26.4
 paddleocr==2.7.3
 # Tesseract fallback
 pytesseract==0.3.13
+opencv-python
