@@ -40,9 +40,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='fr', use_angle_cls=True, use_gpu=False)"
 
-COPY main.py .
-COPY pdf_engine.py .
-COPY ee.pdf .
+COPY . .
 
 EXPOSE 8501
 

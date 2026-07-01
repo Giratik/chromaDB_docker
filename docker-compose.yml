@@ -67,8 +67,3 @@ volumes:
 networks:
   chroma_net:
     name: chroma_net
-    # Pour connecter d'autres docker-compose à ChromaDB :
-    # déclare dans l'autre compose :
-    #   networks:
-    #     chroma_net:
-    #       external: true

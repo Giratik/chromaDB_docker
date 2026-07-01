@@ -126,8 +126,8 @@ def _ocr_paddle(img: Image.Image) -> str:
     - Nettoie les erreurs de caractères
     """
     # 1. Prétraitement
-    processed_img = _preprocess_image_for_ocr(img)
-    arr = _pil_to_numpy(processed_img)
+    #processed_img = _preprocess_image_for_ocr(img)
+    arr = _pil_to_numpy(img)
 
     # 2. OCR avec Paddle
     result = _paddle.ocr(arr, cls=True)
@@ -197,7 +197,7 @@ def _extract_page_text(page) -> str:
     # Rasteriser la page pour l'OCR
     img: Optional[Image.Image] = None
     try:
-        img = page.to_image(resolution=200).original
+        img = page.to_image(resolution=150).original
     except Exception:
         return text   # impossible de rasteriser, on garde le texte partiel
 

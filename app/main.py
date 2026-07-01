@@ -2,6 +2,7 @@ import streamlit as st
 import chromadb
 from chromadb.utils import embedding_functions
 import os
+import re
 import json
 import pandas as pd
 from datetime import datetime, timezone
@@ -514,17 +515,36 @@ else:
             
             doc_dates = {}
             doc_urls = {} # ⬅️ Saisie de l'URL
+            
             for uploaded in uploaded_files:
+                filename = uploaded.name
+                
+                # --- NOUVEAU : Détection automatique de la date ---
+                default_date = "today" # Valeur par défaut de Streamlit
+                match = re.search(r'(\d{4}-\d{2}-\d{2})', filename)
+                if match:
+                    try:
+                        # Si on trouve "YYYY-MM-DD", on le convertit en objet date pour Streamlit
+                        default_date = datetime.strptime(match.group(1), '%Y-%m-%d').date()
+                    except ValueError:
+                        pass # En cas de date invalide (ex: 2024-15-42), on ignore et on garde "today"
+
                 col_name, col_date, col_url = st.columns([2, 1, 2])
                 with col_name:
-                    st.caption(f"📄 {uploaded.name}")
+                    st.caption(f"📄 {filename}")
                 with col_date:
-                    doc_dates[uploaded.name] = st.date_input(
-                        label="Date", key=f"date_{uploaded.name}", label_visibility="collapsed"
+                    doc_dates[filename] = st.date_input(
+                        label="Date", 
+                        value=default_date, # ⬅️ On injecte la date trouvée (ou "today")
+                        key=f"date_{filename}", 
+                        label_visibility="collapsed"
                     )
                 with col_url:
-                    doc_urls[uploaded.name] = st.text_input(
-                        label="URL", key=f"url_{uploaded.name}", placeholder="https://...", label_visibility="collapsed"
+                    doc_urls[filename] = st.text_input(
+                        label="URL", 
+                        key=f"url_{filename}", 
+                        placeholder="https://...", 
+                        label_visibility="collapsed"
                     )
             
             st.markdown("---")
