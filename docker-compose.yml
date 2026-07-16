@@ -53,16 +53,13 @@ services:
     depends_on:
       chromadb:
         condition: service_healthy
-      #ollama:
-      #  condition: service_started
+
     networks:
       - chroma_net
 
 volumes:
   chroma_data:
     driver: local
-  #ollama_data:
-  #  driver: local
 
 networks:
   chroma_net:
