@@ -1,7 +1,0 @@
-streamlit==1.35.0
-chromadb==0.5.3
-ollama>=0.1.0
-rank-bm25>=0.2.2
-flashrank>=0.2.1
-pandas==2.2.2
-numpy>=1.24.0
